@@ -373,7 +373,12 @@ class CommandRouter:
             self._send_message(chat_id, escape_md("暂无状态记录。"))
             return
         has_tracker = bool(self._tracker and self._tracker.list_active(chat_id))
-        state = self._user_state.get_state(chat_id, has_active_tracker=has_tracker)
+        is_resting = self._rest_service.is_resting(chat_id) if self._rest_service else None
+        state = self._user_state.get_state(
+            chat_id,
+            has_active_tracker=has_tracker,
+            is_resting=is_resting,
+        )
         lines = [
             "当前状态：",
             f"- 行动：{escape_md(state.action)}（更新于 {self._fmt_time(state.action_updated_at)}）",

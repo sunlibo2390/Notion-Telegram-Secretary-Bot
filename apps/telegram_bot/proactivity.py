@@ -91,7 +91,12 @@ class ProactivityService:
 
     def describe_next_prompts(self, chat_id: int) -> Dict[str, Any]:
         now = _utcnow()
-        state = self._state_service.get_state(chat_id, has_active_tracker=self._has_active_tracker(chat_id))
+        is_resting = self._is_resting(chat_id, now)
+        state = self._state_service.get_state(
+            chat_id,
+            has_active_tracker=self._has_active_tracker(chat_id),
+            is_resting=is_resting,
+        )
         action_pending, action_due = self._state_due(chat_id, state.action, state.action_updated_at, state.action_prompted_at, now)
         mental_pending, mental_due = self._state_due(chat_id, state.mental, state.mental_updated_at, state.mental_prompted_at, now)
         def _iso_beijing(dt: Optional[datetime]) -> Optional[str]:
@@ -148,9 +153,13 @@ class ProactivityService:
                 return
             self._schedule_state_check(chat_id, timers)
         now = _utcnow()
-        if self._rest_service.is_resting(chat_id, now):
+        if self._is_resting(chat_id, now):
             return
-        state = self._state_service.get_state(chat_id, has_active_tracker=self._has_active_tracker(chat_id))
+        state = self._state_service.get_state(
+            chat_id,
+            has_active_tracker=self._has_active_tracker(chat_id),
+            is_resting=False,
+        )
         events: List[Dict[str, Any]] = []
         action_pending, _ = self._state_due(chat_id, state.action, state.action_updated_at, state.action_prompted_at, now)
         mental_pending, _ = self._state_due(chat_id, state.mental, state.mental_updated_at, state.mental_prompted_at, now)
@@ -253,3 +262,8 @@ class ProactivityService:
         if not self._tracker:
             return False
         return bool(self._tracker.list_active(chat_id))
+
+    def _is_resting(self, chat_id: int, when: Optional[datetime] = None) -> bool:
+        if not self._rest_service:
+            return False
+        return bool(self._rest_service.is_resting(chat_id, when or _utcnow()))

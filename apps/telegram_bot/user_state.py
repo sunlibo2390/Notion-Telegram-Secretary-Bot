@@ -42,7 +42,12 @@ class UserStateService:
         self._states.clear()
         self._save()
 
-    def get_state(self, chat_id: int, has_active_tracker: Optional[bool] = None) -> UserState:
+    def get_state(
+        self,
+        chat_id: int,
+        has_active_tracker: Optional[bool] = None,
+        is_resting: Optional[bool] = None,
+    ) -> UserState:
         raw = self._states.get(str(chat_id), {})
         state = UserState(
             action=raw.get("action", "unknown"),
@@ -52,8 +57,8 @@ class UserStateService:
             action_prompted_at=self._parse_dt(raw.get("action_prompted_at")),
             mental_prompted_at=self._parse_dt(raw.get("mental_prompted_at")),
         )
-        if has_active_tracker is not None:
-            state = self._normalize_action(chat_id, state, has_active_tracker)
+        if has_active_tracker is not None or is_resting is not None:
+            state = self._normalize_action(chat_id, state, has_active_tracker, is_resting)
         return state
 
     def update_state(
@@ -63,12 +68,20 @@ class UserStateService:
         action: Optional[str] = None,
         mental: Optional[str] = None,
         has_active_tracker: Optional[bool] = None,
+        is_resting: Optional[bool] = None,
     ) -> UserState:
-        state = self.get_state(chat_id, has_active_tracker=has_active_tracker)
+        state = self.get_state(
+            chat_id,
+            has_active_tracker=has_active_tracker,
+            is_resting=is_resting,
+        )
         now = _utcnow()
         changed = False
         if action:
-            state.action = action
+            desired = action
+            if is_resting:
+                desired = "休息中"
+            state.action = desired
             state.action_updated_at = now
             state.action_prompted_at = None
             changed = True
@@ -77,6 +90,13 @@ class UserStateService:
             state.mental_updated_at = now
             state.mental_prompted_at = None
             changed = True
+        if has_active_tracker is not None or is_resting is not None:
+            state = self._normalize_action(
+                chat_id,
+                state,
+                has_active_tracker,
+                is_resting,
+            )
         if changed:
             self._persist(chat_id, state)
         return state
@@ -101,11 +121,33 @@ class UserStateService:
         }
         self._save()
 
-    def _normalize_action(self, chat_id: int, state: UserState, has_active_tracker: bool) -> UserState:
-        if state.action == "推进中" and not has_active_tracker:
-            state.action = "unknown"
-            state.action_updated_at = None
-            state.action_prompted_at = None
+    def _normalize_action(
+        self,
+        chat_id: int,
+        state: UserState,
+        has_active_tracker: Optional[bool],
+        is_resting: Optional[bool],
+    ) -> UserState:
+        changed = False
+        now = _utcnow()
+        if is_resting:
+            if state.action != "休息中":
+                state.action = "休息中"
+                state.action_updated_at = now
+                state.action_prompted_at = None
+                changed = True
+        else:
+            if has_active_tracker and state.action == "休息中":
+                state.action = "推进中"
+                state.action_updated_at = now
+                state.action_prompted_at = None
+                changed = True
+            if (has_active_tracker is False or has_active_tracker is None) and state.action == "推进中":
+                state.action = "unknown"
+                state.action_updated_at = None
+                state.action_prompted_at = None
+                changed = True
+        if changed:
             self._persist(chat_id, state)
         return state
 

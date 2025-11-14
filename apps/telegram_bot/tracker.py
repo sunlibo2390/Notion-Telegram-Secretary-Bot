@@ -174,10 +174,14 @@ class TaskTracker:
     def _sync_action_state(self, chat_id: int, action: str, has_tracker: bool) -> None:
         if not self._user_state:
             return
+        is_resting = False
+        if self._rest_service:
+            is_resting = self._rest_service.is_resting(chat_id, _utcnow())
         self._user_state.update_state(
             chat_id,
             action=action,
             has_active_tracker=has_tracker,
+            is_resting=is_resting,
         )
 
     def defer_for_rest(self, chat_id: int, start: datetime, end: datetime) -> None:

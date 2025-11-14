@@ -320,13 +320,17 @@ def build_default_tools(
         if not action and not mental:
             return {"status": "error", "message": "action or mental required"}
         has_tracker = bool(tracker and tracker.list_active(chat_id)) if tracker else False
+        is_resting = bool(rest_service and rest_service.is_resting(chat_id)) if rest_service else False
         if action == "推进中" and not has_tracker:
             return {"status": "error", "message": "需要先开启任务跟踪才能标记为推进中"}
+        if is_resting and action and action != "休息中":
+            action = "休息中"
         state = user_state_service.update_state(
             chat_id,
             action=action or None,
             mental=mental or None,
             has_active_tracker=has_tracker,
+            is_resting=is_resting,
         )
         return {
             "status": "ok",
@@ -355,9 +359,17 @@ def build_default_tools(
             return {"status": "error", "message": str(exc)}
         if tracker:
             tracker.defer_for_rest(chat_id, window.start, window.end)
+        if user_state_service:
+            has_tracker = bool(tracker and tracker.list_active(chat_id)) if tracker else False
+            user_state_service.update_state(
+                chat_id,
+                action="休息中",
+                has_active_tracker=has_tracker,
+                is_resting=True,
+            )
         return {"status": "approved", "window": _serialize_rest_window(window)}
 
-    def rest_cancel_executor(args: Dict[str, Any], __: int) -> Dict[str, Any]:
+    def rest_cancel_executor(args: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
         if not rest_service:
             return {"status": "error", "message": "rest service unavailable"}
         window_id = (args.get("window_id") or "").strip()
@@ -366,6 +378,16 @@ def build_default_tools(
         success = rest_service.cancel_window(window_id)
         if not success:
             return {"status": "error", "message": "window not found"}
+        if user_state_service:
+            has_tracker = bool(tracker and tracker.list_active(chat_id)) if tracker else False
+            still_resting = rest_service.is_resting(chat_id)
+            next_action = "推进中" if (has_tracker and not still_resting) else ("unknown" if not still_resting else None)
+            user_state_service.update_state(
+                chat_id,
+                action=next_action,
+                has_active_tracker=has_tracker,
+                is_resting=still_resting,
+            )
         return {"status": "ok", "window_id": window_id}
 
     tools = [
