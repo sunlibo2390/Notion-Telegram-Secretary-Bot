@@ -368,18 +368,18 @@ class CommandRouter:
         lines = [
             "*指令列表*",
             "/help - 查看所有命令说明",
+            "/tasks [N] - 查看当前待办任务列表（默认 N=10）",
+            "/logs [N] - 查看最近日志（默认 N=5）",
+            "/logs tasks [N] - 按任务归并查看最近日志（默认展示 5 个任务，每个最多 3 条日志）",
+            "/logs delete <序号> - 删除最近一次 /logs 输出中的对应日志",
+            "/logs update <序号> <内容> - 更新对应日志，可包含“任务 XXX：...”重绑任务",
+            "/update - 立即同步 Notion 项目/任务/日志数据",
             "/state - 查看当前记录的行动/心理状态",
             "/next - 查看下一次主动提醒的时间与条件",
             "/blocks [cancel <序号>] - 查看或取消时间块（休息/任务）",
             "/track <任务ID> [分钟] - 开启跟踪提醒，可自定义首个提醒间隔（默认25分钟）",
             "/trackings - 查看当前正在跟踪的任务",
             "/untrack - 取消当前跟踪提醒",
-            "/tasks [N] - 查看当前待办任务，格式与 Agent 输出一致",
-            "/logs [N] - 查看最近 N 条日志（默认 5）",
-            "/logs tasks [N] - 按任务归并查看最近日志（默认展示 5 个任务，每个最多 3 条）",
-            "/logs delete <序号> - 删除最近一次 /logs 输出中的对应日志",
-            "/logs update <序号> <内容> - 更新对应日志，可包含“任务 XXX：...”重绑任务",
-            "/update - 立即同步 Notion 项目/任务/日志数据",
             "/clear - 清空上下文与定时器",
         ]
         self._send_message(chat_id, "\n".join(lines))
@@ -416,10 +416,13 @@ class CommandRouter:
             lines.append(f"- [{name}]({url}) ｜状态:{status} ｜优先级:{priority} ｜截止:{due_text}")
             if project:
                 lines.append(f"  项目：{project}")
-            snippet = (task.content or "").strip()
-            if snippet:
-                preview = escape_md(snippet.splitlines()[0][:120])
-                lines.append(f"  摘要：{preview}")
+            # snippet = (task.content or "").strip()
+            # if snippet:
+            #     # 视为一行，去除空白符，打印前60字符
+            #     snippet_one_line = " ".join(snippet.split())
+            #     preview = snippet_one_line[:60]
+            #     # preview = escape_md(snippet_one_line[:60])
+            #     lines.append(f"  摘要：{preview}")
             lines.append("")
         self._send_message(chat_id, "\n".join(lines).strip(), markdown=True)
 
