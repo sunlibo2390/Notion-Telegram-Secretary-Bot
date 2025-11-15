@@ -20,6 +20,23 @@ from infra.notion_sync import NotionSyncService
 
 
 class CommandRouter:
+    _PROGRESS_KEYWORDS = [
+        "正在",
+        "推进",
+        "完成",
+        "整理",
+        "编写",
+        "写",
+        "做",
+        "处理",
+        "review",
+        "分析",
+        "修复",
+        "debug",
+        "提交",
+        "整理中",
+        "实现",
+    ]
     def __init__(
         self,
         client: TelegramBotClient,
@@ -102,6 +119,7 @@ class CommandRouter:
         if lowered.startswith("/update"):
             self._handle_update(chat_id)
             return
+        self._maybe_auto_update_state(chat_id, text)
         if self._tracker:
             enriched = self._tracker.consume_reply(chat_id, text)
             if enriched:
@@ -425,6 +443,29 @@ class CommandRouter:
             #     lines.append(f"  摘要：{preview}")
             lines.append("")
         self._send_message(chat_id, "\n".join(lines).strip(), markdown=True)
+
+    def _maybe_auto_update_state(self, chat_id: int, text: str) -> None:
+        if not self._user_state or not text:
+            return
+        stripped = text.strip()
+        if not stripped or stripped.startswith("/"):
+            return
+        lowered = stripped.lower()
+        if not any(keyword in lowered for keyword in self._PROGRESS_KEYWORDS):
+            return
+        is_resting = self._rest_service.is_resting(chat_id) if self._rest_service else None
+        has_tracker = bool(self._tracker and self._tracker.list_active(chat_id))
+        has_task_block = (
+            self._rest_service.has_active_task_block(chat_id) if self._rest_service else None
+        )
+        self._user_state.update_state(
+            chat_id,
+            action="推进中",
+            mental="稳定",
+            has_active_tracker=has_tracker,
+            is_resting=is_resting,
+            has_task_block=has_task_block,
+        )
 
     def _handle_state(self, chat_id: int) -> None:
         if not self._user_state:
