@@ -222,7 +222,10 @@ class ProactivityService:
             cooldown_due = prompted_at + timedelta(seconds=cooldown_seconds)
             if due < cooldown_due:
                 due = cooldown_due
-        if pending and due < now:
+        if pending:
+            retry_due = now + timedelta(seconds=self._unknown_retry_seconds)
+            due = retry_due if due < retry_due else due
+        elif due < now:
             due = now
         return pending, due
 

@@ -534,8 +534,6 @@ class CommandRouter:
             except ValueError:
                 pass
         if data.get("pending"):
-            if immediate:
-                return f"{status}｜等待反馈，立即追问"
             return f"{status}｜等待反馈，将在 {due_text} 追问"
         return f"{status}｜记录有效，将在 {due_text} 再次确认"
 
