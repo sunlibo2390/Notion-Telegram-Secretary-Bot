@@ -84,6 +84,9 @@ class CommandRouter:
         if lowered.startswith("/help"):
             self._handle_help(chat_id)
             return
+        if lowered.startswith("/tasks"):
+            self._handle_tasks(chat_id, text)
+            return
         if lowered.startswith("/state"):
             self._handle_state(chat_id)
             return
@@ -371,6 +374,7 @@ class CommandRouter:
             "/track <任务ID> [分钟] - 开启跟踪提醒，可自定义首个提醒间隔（默认25分钟）",
             "/trackings - 查看当前正在跟踪的任务",
             "/untrack - 取消当前跟踪提醒",
+            "/tasks [N] - 查看当前待办任务，格式与 Agent 输出一致",
             "/logs [N] - 查看最近 N 条日志（默认 5）",
             "/logs tasks [N] - 按任务归并查看最近日志（默认展示 5 个任务，每个最多 3 条）",
             "/logs delete <序号> - 删除最近一次 /logs 输出中的对应日志",
@@ -379,6 +383,45 @@ class CommandRouter:
             "/clear - 清空上下文与定时器",
         ]
         self._send_message(chat_id, "\n".join(lines))
+
+    def _handle_tasks(self, chat_id: int, text: str) -> None:
+        if not self._task_repo:
+            self._send_message(chat_id, escape_md("任务数据不可用。"))
+            return
+        limit = 10
+        parts = text.split()
+        for token in parts[1:]:
+            if token.isdigit():
+                limit = max(1, min(20, int(token)))
+                break
+        tasks = self._task_repo.list_active_tasks()
+        if not tasks:
+            self._send_message(chat_id, escape_md("当前没有待办任务。"))
+            return
+        def sort_key(task):
+            priority_order = {"Urgent": 0, "High": 1, "Medium": 2, "Low": 3}
+            return (
+                priority_order.get(task.priority, 99),
+                task.due_date or "9999-12-31",
+                task.name.lower(),
+            )
+        lines: List[str] = []
+        for task in sorted(tasks, key=sort_key)[:limit]:
+            url = task.page_url or f"https://www.notion.so/{task.id.replace('-', '')}"
+            name = escape_md(task.name)
+            priority = escape_md(task.priority or "Unknown")
+            status = escape_md(task.status or "Unknown")
+            due_text = self._format_due(task.due_date)
+            project = escape_md(task.project_name or "")
+            lines.append(f"- [{name}]({url}) ｜状态:{status} ｜优先级:{priority} ｜截止:{due_text}")
+            if project:
+                lines.append(f"  项目：{project}")
+            snippet = (task.content or "").strip()
+            if snippet:
+                preview = escape_md(snippet.splitlines()[0][:120])
+                lines.append(f"  摘要：{preview}")
+            lines.append("")
+        self._send_message(chat_id, "\n".join(lines).strip(), markdown=True)
 
     def _handle_state(self, chat_id: int) -> None:
         if not self._user_state:
