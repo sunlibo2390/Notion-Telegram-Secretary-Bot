@@ -38,6 +38,7 @@ class TrackerEntry:
     timer: Optional[threading.Timer]
     waiting: bool = False
     start_time: datetime = field(default_factory=_utcnow)
+    interval_seconds: int = 1500
 
 
 class TaskTracker:
@@ -65,21 +66,35 @@ class TaskTracker:
         timer.daemon = True
         return timer
 
-    def start_tracking(self, chat_id: int, task: Task) -> None:
+    def start_tracking(
+        self,
+        chat_id: int,
+        task: Task,
+        interval_minutes: Optional[int] = None,
+    ) -> None:
+        custom_interval = None
+        if interval_minutes:
+            custom_interval = max(5, min(120, interval_minutes)) * 60
+        interval = custom_interval or self._initial_interval
         with self._lock:
             self._cancel(chat_id)
-            timer = self._timer_factory(self._initial_interval, self._send_reminder, (chat_id,))
+            timer = self._timer_factory(interval, self._send_reminder, (chat_id,))
             entry = TrackerEntry(
                 task_id=task.id,
                 task_name=task.name,
                 task_url=task.page_url or f"https://www.notion.so/{task.id.replace('-', '')}",
                 timer=timer,
+                interval_seconds=interval,
             )
             self._entries[chat_id] = entry
             timer.start()
+        minutes = interval // 60
         self._client.send_message(
             chat_id=chat_id,
-            text=f"\u5df2\u5f00\u59cb\u8ddf\u8e2a {escape_md(task.name)}\uff0c{self._initial_interval // 60} \u5206\u949f\u540e\u5c06\u518d\u6b21\u8be2\u95ee\u3002",
+            text=(
+                f"\u5df2\u5f00\u59cb\u8ddf\u8e2a {escape_md(task.name)}\uff0c"
+                f"{minutes} \u5206\u949f\u540e\u5c06\u518d\u6b21\u8be2\u95ee\u3002"
+            ),
         )
         self._sync_action_state(chat_id, "\u63a8\u8fdb\u4e2d", has_tracker=True)
 

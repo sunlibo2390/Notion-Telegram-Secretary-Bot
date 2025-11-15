@@ -10,6 +10,7 @@ from apps.telegram_bot.clients import TelegramBotClient
 from apps.telegram_bot.history import HistoryStore
 from apps.telegram_bot.proactivity import ProactivityService, QUESTION_EVENT, STATE_EVENT
 from apps.telegram_bot.rest import RestScheduleService, RestWindow
+from apps.telegram_bot.session_monitor import TaskSessionMonitor
 from apps.telegram_bot.tracker import TaskTracker, escape_md
 from apps.telegram_bot.user_state import UserStateService
 from core.llm.agent import LLMAgent
@@ -30,6 +31,7 @@ class CommandRouter:
         proactivity: Optional[ProactivityService] = None,
         user_state: Optional[UserStateService] = None,
         rest_service: Optional[RestScheduleService] = None,
+        session_monitor: Optional[TaskSessionMonitor] = None,
         notion_sync: Optional[NotionSyncService] = None,
     ):
         self._client = client
@@ -41,6 +43,7 @@ class CommandRouter:
         self._proactivity = proactivity
         self._user_state = user_state
         self._rest_service = rest_service
+        self._session_monitor = session_monitor
         self._notion_sync = notion_sync
         self._log_snapshot: Dict[int, List[str]] = {}
         self._rest_snapshot: Dict[int, List[str]] = {}
@@ -116,11 +119,17 @@ class CommandRouter:
             self._send_message(chat_id, escape_md("用法：/track 任务ID"))
             return
         task_id = parts[1].strip()
+        interval_minutes: Optional[int] = None
+        if len(parts) >= 3:
+            for token in parts[2:]:
+                if token.isdigit():
+                    interval_minutes = int(token)
+                    break
         task = self._task_repo.get_task(task_id)
         if not task:
             self._send_message(chat_id, escape_md("未找到该任务ID，请检查。"))
             return
-        self._tracker.start_tracking(chat_id, task)
+        self._tracker.start_tracking(chat_id, task, interval_minutes=interval_minutes)
 
     def _handle_untrack(self, chat_id: int) -> None:
         if not self._tracker:
@@ -329,24 +338,27 @@ class CommandRouter:
                 self._send_message(chat_id, escape_md("序号超出范围，请重新 /rest 查看。"))
                 return
             window_id = snapshot[index - 1]
+            window = self._rest_service.get_window(window_id)
             success = self._rest_service.cancel_window(window_id)
             if success:
                 self._rest_snapshot[chat_id] = [wid for wid in snapshot if wid != window_id]
-                self._send_message(chat_id, escape_md(f"已取消第 {index} 条休息安排。"))
+                if self._session_monitor and window and window.session_type == "task":
+                    self._session_monitor.cancel(window_id)
+                self._send_message(chat_id, escape_md(f"已取消第 {index} 条时间块安排。"))
             else:
                 self._send_message(chat_id, escape_md("取消失败，休息安排已过期或不存在。"))
             return
         windows = self._rest_service.list_windows(chat_id, include_past=False)
         if not windows:
             self._rest_snapshot.pop(chat_id, None)
-            self._send_message(chat_id, escape_md("暂无休息安排。可直接说“13:00-14:00 想休息”与我沟通。"))
+            self._send_message(chat_id, escape_md("暂无时间块安排。可以对我说“14:00-16:00 专注 Magnet 代码”或“13:00-14:00 想休息”。"))
             return
         self._rest_snapshot[chat_id] = [window.id for window in windows]
-        lines = ["休息安排："]
+        lines = ["时间块安排："]
         for idx, window in enumerate(windows, start=1):
             lines.append(f"{idx}. {self._format_rest_window(window)}")
         lines.append("")
-        lines.append("使用 `/rest cancel <序号>` 可撤销。对我说“我想在 13:00-14:00 休息”即可发起申请。")
+        lines.append("使用 `/rest cancel <序号>` 可撤销。")
         self._send_message(chat_id, "\n".join(lines), markdown=False)
 
     def _handle_help(self, chat_id: int) -> None:
@@ -355,8 +367,8 @@ class CommandRouter:
             "/help - 查看所有命令说明",
             "/state - 查看当前记录的行动/心理状态",
             "/next - 查看下一次主动提醒的时间与条件",
-            "/rest [cancel <序号>] - 查看或取消休息时间段",
-            "/track <任务ID> - 为指定任务开启跟踪提醒",
+            "/rest [cancel <序号>] - 查看或取消时间块（休息/任务）",
+            "/track <任务ID> [分钟] - 开启跟踪提醒，可自定义首个提醒间隔（默认25分钟）",
             "/trackings - 查看当前正在跟踪的任务",
             "/untrack - 取消当前跟踪提醒",
             "/logs [N] - 查看最近 N 条日志（默认 5）",
@@ -530,4 +542,9 @@ class CommandRouter:
         end = format_beijing(window.end, "%m-%d %H:%M")
         status_map = {"pending": "待确认", "approved": "已批准", "cancelled": "已取消", "rejected": "已拒绝"}
         status = status_map.get(window.status, window.status)
-        return f"{start} ~ {end} ｜状态:{status}{note}"
+        if window.session_type == "task":
+            task_label = window.task_name or window.task_id or "未命名任务"
+            prefix = f"[任务] {task_label}"
+        else:
+            prefix = "[休息]"
+        return f"{prefix} {start} ~ {end} ｜状态:{status}{note}"

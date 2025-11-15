@@ -11,6 +11,7 @@ from apps.telegram_bot.handlers import CommandRouter
 from apps.telegram_bot.history import HistoryStore
 from apps.telegram_bot.proactivity import ProactivityService
 from apps.telegram_bot.rest import RestScheduleService
+from apps.telegram_bot.session_monitor import TaskSessionMonitor
 from apps.telegram_bot.tracker import TaskTracker
 from apps.telegram_bot.user_state import UserStateService
 from core.llm.agent import LLMAgent
@@ -83,6 +84,7 @@ def build_runtime() -> BotRuntime:
         request_timeout=settings.telegram.poll_timeout + 5,
         wecom_client=wecom_client,
     )
+    session_monitor = TaskSessionMonitor(client, rest_service)
     profile_path = Path(__file__).resolve().parents[2] / "docs" / "user_profile_doc.md"
     # print(profile_path)
     context_builder = AgentContextBuilder(history, profile_path)
@@ -114,6 +116,7 @@ def build_runtime() -> BotRuntime:
         history_store=history,
         user_state_service=user_state,
         rest_service=rest_service,
+        session_monitor=session_monitor,
         notion_sync_service=notion_sync,
     )
     if settings.llm and settings.llm.enabled:
@@ -159,6 +162,7 @@ def build_runtime() -> BotRuntime:
         proactivity=proactivity,
         user_state=user_state,
         rest_service=rest_service,
+        session_monitor=session_monitor,
         notion_sync=notion_sync,
     )
     return BotRuntime(

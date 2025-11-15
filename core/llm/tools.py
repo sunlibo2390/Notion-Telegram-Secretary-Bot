@@ -55,6 +55,7 @@ def build_default_tools(
     history_store: HistoryStore | None = None,
     user_state_service: UserStateService | None = None,
     rest_service: RestScheduleService | None = None,
+    session_monitor: Any | None = None,
     notion_sync_service: Any | None = None,
 ) -> List[AgentTool]:
     def _split_queries(raw: str) -> List[str]:
@@ -208,7 +209,14 @@ def build_default_tools(
         task = task_repository.get_task(task_id) if task_id else None
         if not task:
             return {"status": "error", "message": "task not found"}
-        tracker.start_tracking(chat_id, task)
+        interval_minutes = None
+        raw_interval = args.get("interval_minutes")
+        if raw_interval is not None:
+            try:
+                interval_minutes = int(raw_interval)
+            except (TypeError, ValueError):
+                interval_minutes = None
+        tracker.start_tracking(chat_id, task, interval_minutes=interval_minutes)
         return {"status": "ok", "task": task_id}
 
     def stop_tracker_executor(args: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
@@ -343,7 +351,17 @@ def build_default_tools(
             return {"windows": []}
         include_past = bool(args.get("include_past"))
         windows = rest_service.list_windows(chat_id, include_past=include_past)
-        return {"windows": [_serialize_rest_window(window) for window in windows]}
+        return {
+            "windows": [
+                {
+                    **_serialize_rest_window(window),
+                    "session_type": window.session_type,
+                    "task_id": window.task_id,
+                    "task_name": window.task_name,
+                }
+                for window in windows
+            ]
+        }
 
     def rest_propose_executor(args: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
         if not rest_service:
@@ -353,13 +371,31 @@ def build_default_tools(
         if not start or not end:
             return {"status": "error", "message": "start/end must be ISO8601 datetime"}
         note = (args.get("note") or "").strip()
+        mode = (args.get("session_type") or args.get("mode") or "rest").strip().lower()
+        if mode not in {"rest", "task"}:
+            return {"status": "error", "message": "session_type must be rest or task"}
+        task_name_arg = (args.get("task_name") or "").strip()
+        task_id = (args.get("task_id") or "").strip() or None
+        if mode == "task" and not (task_id or task_name_arg):
+            return {"status": "error", "message": "task sessions require task_name or task_id"}
         try:
-            window = rest_service.add_window(chat_id, start, end, note=note, status="approved")
+            window = rest_service.add_window(
+                chat_id,
+                start,
+                end,
+                note=note,
+                status="approved",
+                session_type=mode,
+                task_id=task_id,
+                task_name=task_name_arg or None,
+            )
         except ValueError as exc:
             return {"status": "error", "message": str(exc)}
-        if tracker:
+        if tracker and mode == "rest":
             tracker.defer_for_rest(chat_id, window.start, window.end)
-        if user_state_service:
+        if session_monitor:
+            session_monitor.schedule(window)
+        if user_state_service and mode == "rest":
             has_tracker = bool(tracker and tracker.list_active(chat_id)) if tracker else False
             user_state_service.update_state(
                 chat_id,
@@ -367,7 +403,15 @@ def build_default_tools(
                 has_active_tracker=has_tracker,
                 is_resting=True,
             )
-        return {"status": "approved", "window": _serialize_rest_window(window)}
+        return {
+            "status": "approved",
+            "window": {
+                **_serialize_rest_window(window),
+                "session_type": window.session_type,
+                "task_id": window.task_id,
+                "task_name": window.task_name,
+            },
+        }
 
     def rest_cancel_executor(args: Dict[str, Any], chat_id: int) -> Dict[str, Any]:
         if not rest_service:
@@ -375,19 +419,27 @@ def build_default_tools(
         window_id = (args.get("window_id") or "").strip()
         if not window_id:
             return {"status": "error", "message": "window_id required"}
+        window = rest_service.get_window(window_id)
         success = rest_service.cancel_window(window_id)
         if not success:
             return {"status": "error", "message": "window not found"}
+        if session_monitor:
+            session_monitor.cancel(window_id)
         if user_state_service:
             has_tracker = bool(tracker and tracker.list_active(chat_id)) if tracker else False
             still_resting = rest_service.is_resting(chat_id)
-            next_action = "推进中" if (has_tracker and not still_resting) else ("unknown" if not still_resting else None)
-            user_state_service.update_state(
-                chat_id,
-                action=next_action,
-                has_active_tracker=has_tracker,
-                is_resting=still_resting,
+            next_action = (
+                "推进中"
+                if (has_tracker and not still_resting)
+                else ("unknown" if not still_resting else None)
             )
+            if window and window.session_type == "rest":
+                user_state_service.update_state(
+                    chat_id,
+                    action=next_action,
+                    has_active_tracker=has_tracker,
+                    is_resting=still_resting,
+                )
         return {"status": "ok", "window_id": window_id}
 
     tools = [
@@ -464,6 +516,10 @@ def build_default_tools(
                     "properties": {
                         "task_id": {"type": "string"},
                         "task_name": {"type": "string"},
+                        "interval_minutes": {
+                            "type": "integer",
+                            "description": "自定义首次提醒间隔（分钟，默认 25）",
+                        },
                     },
                 },
                 executor=tracker_executor,
@@ -602,7 +658,7 @@ def build_default_tools(
                 ),
                 AgentTool(
                     name="rest_propose",
-                    description="创建一个新的休息窗口（立即生效）",
+                    description="创建一个新的时间块，可以是休息或指定任务的专注窗口（立即生效）",
                     parameters={
                         "type": "object",
                         "properties": {
@@ -617,6 +673,18 @@ def build_default_tools(
                             "note": {
                                 "type": "string",
                                 "description": "可选理由或补充说明",
+                            },
+                            "session_type": {
+                                "type": "string",
+                                "description": "rest 表示休息，task 表示针对某个任务的时间块",
+                            },
+                            "task_name": {
+                                "type": "string",
+                                "description": "session_type=task 时填写的人类可读任务名称",
+                            },
+                            "task_id": {
+                                "type": "string",
+                                "description": "session_type=task 时可以传任务 ID",
                             },
                         },
                         "required": ["start", "end"],

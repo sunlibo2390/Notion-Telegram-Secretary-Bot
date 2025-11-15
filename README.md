@@ -64,7 +64,7 @@ notion_secretary/
 - **多轮上下文**：`apps/telegram_bot/history/HistoryStore` 持久化用户与 Bot 消息，LLM 在每轮 prompt 中可访问最近 N 条历史 + 长期画像。
 - **可靠性**：仍采用 `getUpdates` 长轮询。Telegram 只返回用户留言，因此 `TelegramBotClient.send_message` 必须保存响应体用于复原历史。更多细节见 `docs/telegram_architecture.md`.
 - **指令小抄**：
-  - `/track <任务ID>`：立即开启 25 分钟提醒，并在定时后追问进展。
+  - `/track <任务ID> [分钟]`：开启任务跟踪；未指定时默认 25 分钟提醒，可按需定制首个提醒间隔。
   - `/trackings`：查看当前会话内正在跟踪的任务。
   - `/untrack`：在用户确认后，取消当前的跟踪提醒（LLM 对话模式也可通过调用 stop_tracker 工具执行同一操作）。
   - `/logs [N]`：查看最近 N 条日志（默认 5，最多 20），便于快速回顾记录。
@@ -72,6 +72,7 @@ notion_secretary/
   - `/state` / `/next`：查看当前记录的行动/心理状态以及下一次主动提醒的预计时间（含跟踪任务、状态检查）。
   - `/logs update <序号> <内容>`：更新指定日志的内容（可附 `任务 XXX：...` 自动重绑任务）。
   - `/update`：立即从 Notion 拉取项目/任务/日志，刷新本地缓存。
+- **时间块管理**：`/rest` 统一展示「休息」与「任务专注」时间段；对 Bot 说 “14:00-16:00 专注 Magnet 代码” 会创建任务窗口并在结束时提醒终止，避免任务无限拖延。
 - **日志智能**：Agent 触发 `record_log` 工具时会结合当前对话与近期历史自动匹配任务；若需要修订，可使用 `/logs update` 或 `update_log` 工具重新绑定。
 - **本地记忆**：手动创建的任务写入 `json/agent_tasks.json`，日志写入 `json/agent_logs.json`，即使执行 `/update` 或重新跑 `scripts/sync_databases.py` 也不会被覆盖。
 - **多渠道同步**：在 `config/settings.toml` 中配置 `[wecom].webhook_url` 后，Agent 的每条回复都会镜像到对应的企业微信机器人，方便在其他终端实时关注。
