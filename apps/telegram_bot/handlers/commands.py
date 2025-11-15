@@ -90,8 +90,8 @@ class CommandRouter:
         if lowered.startswith("/next"):
             self._handle_next(chat_id)
             return
-        if lowered.startswith("/rest"):
-            self._handle_rest(chat_id, text)
+        if lowered.startswith("/blocks") or lowered.startswith("/rest"):
+            self._handle_blocks(chat_id, text)
             return
         if lowered.startswith("/logs"):
             self._handle_logs(chat_id, text)
@@ -318,24 +318,24 @@ class CommandRouter:
         else:
             self._send_message(chat_id, escape_md("更新失败，未找到该日志。"))
 
-    def _handle_rest(self, chat_id: int, text: str) -> None:
+    def _handle_blocks(self, chat_id: int, text: str) -> None:
         if not self._rest_service:
-            self._send_message(chat_id, escape_md("未启用休息日程功能。"))
+            self._send_message(chat_id, escape_md("未启用时间块功能。"))
             return
         parts = text.split()
         lowered = parts[1].lower() if len(parts) > 1 else ""
         if len(parts) >= 3 and lowered == "cancel":
             snapshot = self._rest_snapshot.get(chat_id)
             if not snapshot:
-                self._send_message(chat_id, escape_md("请先使用 /rest 查看当前列表，再执行取消。"))
+                self._send_message(chat_id, escape_md("请先使用 /blocks 查看当前列表，再执行取消。"))
                 return
             try:
                 index = int(parts[2])
             except ValueError:
-                self._send_message(chat_id, escape_md("用法：/rest cancel 序号"))
+                self._send_message(chat_id, escape_md("用法：/blocks cancel 序号"))
                 return
             if index < 1 or index > len(snapshot):
-                self._send_message(chat_id, escape_md("序号超出范围，请重新 /rest 查看。"))
+                self._send_message(chat_id, escape_md("序号超出范围，请重新 /blocks 查看。"))
                 return
             window_id = snapshot[index - 1]
             window = self._rest_service.get_window(window_id)
@@ -346,7 +346,7 @@ class CommandRouter:
                     self._session_monitor.cancel(window_id)
                 self._send_message(chat_id, escape_md(f"已取消第 {index} 条时间块安排。"))
             else:
-                self._send_message(chat_id, escape_md("取消失败，休息安排已过期或不存在。"))
+                self._send_message(chat_id, escape_md("取消失败，时间块已过期或不存在。"))
             return
         windows = self._rest_service.list_windows(chat_id, include_past=False)
         if not windows:
@@ -358,7 +358,7 @@ class CommandRouter:
         for idx, window in enumerate(windows, start=1):
             lines.append(f"{idx}. {self._format_rest_window(window)}")
         lines.append("")
-        lines.append("使用 `/rest cancel <序号>` 可撤销。")
+        lines.append("使用 `/blocks cancel <序号>` 可撤销。")
         self._send_message(chat_id, "\n".join(lines), markdown=False)
 
     def _handle_help(self, chat_id: int) -> None:
@@ -367,7 +367,7 @@ class CommandRouter:
             "/help - 查看所有命令说明",
             "/state - 查看当前记录的行动/心理状态",
             "/next - 查看下一次主动提醒的时间与条件",
-            "/rest [cancel <序号>] - 查看或取消时间块（休息/任务）",
+            "/blocks [cancel <序号>] - 查看或取消时间块（休息/任务）",
             "/track <任务ID> [分钟] - 开启跟踪提醒，可自定义首个提醒间隔（默认25分钟）",
             "/trackings - 查看当前正在跟踪的任务",
             "/untrack - 取消当前跟踪提醒",
