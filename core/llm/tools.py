@@ -223,7 +223,7 @@ def build_default_tools(
         if not tracker:
             return {"status": "error", "message": "tracking not supported"}
         task_name = args.get("task_name")
-        entry = tracker.stop_tracking(chat_id, ensure_name=task_name)
+        entry = tracker.stop_tracking(chat_id, task_hint=task_name)
         if not entry:
             return {"status": "error", "message": "no matching tracking"}
         return {"status": "ok", "task": entry.task_id, "task_name": entry.task_name}

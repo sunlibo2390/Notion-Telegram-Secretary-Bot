@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
@@ -57,11 +57,10 @@ class TaskTracker:
         self._initial_interval = interval_seconds
         self._follow_up_interval = follow_up_seconds
         self._rest_service = rest_service
-        self._entries: Dict[int, TrackerEntry] = {}
+        self._entries: Dict[int, Dict[str, TrackerEntry]] = {}
         self._lock = threading.Lock()
         self._timer_factory = timer_factory or self._default_timer
         self._user_state = user_state
-        self._rest_paused: Dict[int, datetime] = {}
 
     def _default_timer(self, delay, callback, args):
         timer = threading.Timer(delay, callback, args=args)
@@ -82,9 +81,13 @@ class TaskTracker:
         if interval_minutes:
             custom_interval = max(5, min(180, interval_minutes)) * 60
         interval = custom_interval or self._initial_interval
+        now = _utcnow()
         with self._lock:
-            self._cancel(chat_id)
-            timer = self._timer_factory(interval, self._send_reminder, (chat_id,))
+            entry_map = self._entries.setdefault(chat_id, {})
+            existing = entry_map.pop(task.id, None)
+            if existing and existing.timer:
+                existing.timer.cancel()
+            timer = self._timer_factory(interval, self._send_reminder, (chat_id, task.id))
             entry = TrackerEntry(
                 task_id=task.id,
                 task_name=task.name,
@@ -93,58 +96,94 @@ class TaskTracker:
                 interval_seconds=interval,
                 context=context,
                 metadata=metadata or {},
+                start_time=now,
             )
-            self._entries[chat_id] = entry
+            entry_map[task.id] = entry
             timer.start()
         if notify_user:
             minutes = interval // 60
             self._client.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"\u5df2\u5f00\u59cb\u8ddf\u8e2a {escape_md(task.name)}\uff0c"
-                    f"{minutes} \u5206\u949f\u540e\u5c06\u518d\u6b21\u8be2\u95ee\u3002"
+                    f"已开始跟踪 {escape_md(task.name)}，"
+                    f"{minutes} 分钟后将再次询问。"
                 ),
             )
         if update_action_state:
-            self._sync_action_state(chat_id, "\u63a8\u8fdb\u4e2d", has_tracker=True)
+            self._sync_action_state(chat_id, "推进中", has_tracker=True)
 
-    def _send_reminder(self, chat_id: int) -> None:
+    def _send_reminder(self, chat_id: int, task_id: str) -> None:
         with self._lock:
-            entry = self._entries.get(chat_id)
+            entry_map = self._entries.get(chat_id)
+            if not entry_map:
+                return
+            entry = entry_map.get(task_id)
             if not entry:
                 return
             now = _utcnow()
             if self._rest_service and self._rest_service.is_resting(chat_id, now):
                 resume = self._rest_service.next_resume_time(chat_id, now)
                 delay = (resume - now).total_seconds() if resume else self._follow_up_interval
-                entry.timer = self._timer_factory(delay, self._send_reminder, (chat_id,))
+                entry.timer = self._timer_factory(delay, self._send_reminder, (chat_id, task_id))
                 entry.timer.start()
+                entry.start_time = now
+                entry.waiting = False
                 return
             entry.waiting = True
+            entry.start_time = now
             if self._follow_up_interval > 0:
-                entry.timer = self._timer_factory(self._follow_up_interval, self._send_reminder, (chat_id,))
+                entry.timer = self._timer_factory(
+                    self._follow_up_interval, self._send_reminder, (chat_id, task_id)
+                )
                 entry.timer.start()
         self._client.send_message(
             chat_id=chat_id,
             text=(
-                f"\u23f0 \u65f6\u95f4\u5230\u3002\u8bf7\u6c47\u62a5\u4efb\u52a1 [{escape_md(entry.task_name)}]"
-                f"({entry.task_url}) \u7684\u8fdb\u5c55\uff0c\u5e76\u8bf4\u660e\u4e0b\u4e00\u6b65\u3002"
+                f"⏰ 时间到。请汇报任务 [{escape_md(entry.task_name)}]"
+                f"({entry.task_url}) 的进展，并说明下一步。"
             ),
         )
 
     def consume_reply(self, chat_id: int, user_text: str) -> Optional[str]:
         with self._lock:
-            entry = self._entries.get(chat_id)
-            if not entry or not entry.waiting:
+            entry_map = self._entries.get(chat_id)
+            if not entry_map:
+                return None
+            waiting_items = [
+                (task_id, entry)
+                for task_id, entry in entry_map.items()
+                if entry.waiting
+            ]
+            if not waiting_items:
+                return None
+            target_task_id: Optional[str] = None
+            if len(waiting_items) == 1:
+                target_task_id = waiting_items[0][0]
+            else:
+                lowered = user_text.lower()
+                for task_id, entry in waiting_items:
+                    if entry.task_id and entry.task_id in user_text:
+                        target_task_id = task_id
+                        break
+                    if entry.task_name and entry.task_name.lower() in lowered:
+                        target_task_id = task_id
+                        break
+            if not target_task_id:
+                return None
+            entry = entry_map.pop(target_task_id, None)
+            if not entry:
                 return None
             if entry.timer:
                 entry.timer.cancel()
-            self._entries.pop(chat_id, None)
+            has_tracker = bool(entry_map)
+            if not entry_map:
+                self._entries.pop(chat_id, None)
         response = (
-            f"\u8ddf\u8e2a\u4efb\u52a1 {entry.task_name} \u7684\u8fdb\u5c55\u53cd\u9988\uff1a{user_text}\n"
-            f"\u8bf7\u7ed3\u5408\u4efb\u52a1\u94fe\u63a5 {entry.task_url} \u7684\u72b6\u6001\uff0c\u7ed9\u51fa\u4e0b\u4e00\u6b65\u5efa\u8bae\u3002"
+            f"跟踪任务 {entry.task_name} 的进展反馈：{user_text}\n"
+            f"请结合任务链接 {entry.task_url} 的状态，给出下一步建议。"
         )
-        self._sync_action_state(chat_id, "unknown", has_tracker=False)
+        if not has_tracker:
+            self._sync_action_state(chat_id, "unknown", has_tracker=False)
         return response
 
     def request_feedback(
@@ -156,7 +195,10 @@ class TaskTracker:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         with self._lock:
-            self._cancel(chat_id)
+            entry_map = self._entries.setdefault(chat_id, {})
+            existing = entry_map.pop(task.id, None)
+            if existing and existing.timer:
+                existing.timer.cancel()
             entry = TrackerEntry(
                 task_id=task.id,
                 task_name=task.name,
@@ -166,61 +208,107 @@ class TaskTracker:
                 interval_seconds=self._follow_up_interval,
                 context=context,
                 metadata=metadata or {},
+                start_time=_utcnow(),
             )
             if self._follow_up_interval > 0:
-                entry.timer = self._timer_factory(self._follow_up_interval, self._send_reminder, (chat_id,))
+                entry.timer = self._timer_factory(
+                    self._follow_up_interval, self._send_reminder, (chat_id, task.id)
+                )
                 entry.timer.start()
-            self._entries[chat_id] = entry
+            entry_map[task.id] = entry
         self._client.send_message(chat_id=chat_id, text=prompt)
 
-    def stop_tracking(self, chat_id: int, ensure_name: str | None = None) -> Optional[TrackerEntry]:
+    def stop_tracking(
+        self,
+        chat_id: int,
+        task_hint: str | None = None,
+    ) -> Optional[TrackerEntry]:
         with self._lock:
-            entry = self._entries.get(chat_id)
-            if not entry:
+            entry_map = self._entries.get(chat_id)
+            if not entry_map:
                 return None
-            if ensure_name and ensure_name.lower() not in entry.task_name.lower():
+            target_id: Optional[str] = None
+            if task_hint:
+                lowered = task_hint.lower()
+                target_id = next(
+                    (task_id for task_id in entry_map.keys() if task_id.lower() == lowered),
+                    None,
+                )
+                if not target_id:
+                    target_id = next(
+                        (
+                            task_id
+                            for task_id, entry in entry_map.items()
+                            if lowered in entry.task_name.lower()
+                        ),
+                        None,
+                    )
+            else:
+                if len(entry_map) == 1:
+                    target_id = next(iter(entry_map.keys()))
+                else:
+                    return None
+            if not target_id:
                 return None
-            cancelled = self._cancel(chat_id)
-        if cancelled:
+            entry = entry_map.pop(target_id, None)
+            if entry and entry.timer:
+                entry.timer.cancel()
+            has_tracker = bool(entry_map)
+            if not entry_map:
+                self._entries.pop(chat_id, None)
+        if entry and not has_tracker:
             self._sync_action_state(chat_id, "unknown", has_tracker=False)
-        return cancelled
+        return entry
 
     def clear(self, chat_id: int) -> None:
-        self.stop_tracking(chat_id)
+        with self._lock:
+            entry_map = self._entries.pop(chat_id, None)
+        if not entry_map:
+            return
+        for entry in entry_map.values():
+            if entry.timer:
+                entry.timer.cancel()
+        self._sync_action_state(chat_id, "unknown", has_tracker=False)
 
     def list_active(self, chat_id: int) -> list[TrackerEntry]:
         with self._lock:
-            entry = self._entries.get(chat_id)
-            return [entry] if entry else []
+            entry_map = self._entries.get(chat_id, {})
+            return sorted(entry_map.values(), key=lambda item: item.start_time)
 
     def next_event(self, chat_id: int) -> Optional[Dict[str, Any]]:
         with self._lock:
-            entry = self._entries.get(chat_id)
-            if not entry:
+            entry_map = self._entries.get(chat_id)
+            if not entry_map:
                 return None
             now = _utcnow()
-            if self._rest_service and self._rest_service.is_resting(chat_id, now):
-                resume = self._rest_service.next_resume_time(chat_id, now)
-                due = resume or now
-                waiting = True
-            elif entry.waiting and self._follow_up_interval > 0:
-                due = now + timedelta(seconds=self._follow_up_interval)
-                waiting = True
-            else:
-                due = entry.start_time + timedelta(seconds=self._initial_interval)
-                waiting = False
-            due_local = to_beijing(due if due.tzinfo else due.replace(tzinfo=timezone.utc))
+            best_entry: Optional[TrackerEntry] = None
+            best_due: Optional[datetime] = None
+            best_waiting = False
+            for entry in entry_map.values():
+                if self._rest_service and self._rest_service.is_resting(chat_id, now):
+                    resume = self._rest_service.next_resume_time(chat_id, now)
+                    due = resume or now
+                    waiting = True
+                elif entry.waiting and self._follow_up_interval > 0:
+                    due = now + timedelta(seconds=self._follow_up_interval)
+                    waiting = True
+                else:
+                    due = entry.start_time + timedelta(seconds=entry.interval_seconds)
+                    waiting = False
+                if not best_due or due < best_due:
+                    best_due = due
+                    best_entry = entry
+                    best_waiting = waiting or entry.waiting
+            if not best_entry or not best_due:
+                return None
+            due_local = to_beijing(
+                best_due if best_due.tzinfo else best_due.replace(tzinfo=timezone.utc)
+            )
             return {
-                "task_name": entry.task_name,
+                "task_name": best_entry.task_name,
                 "due_time": due_local.isoformat(),
-                "waiting": waiting or entry.waiting,
+                "waiting": best_waiting,
             }
-
-    def _cancel(self, chat_id: int) -> Optional[TrackerEntry]:
-        entry = self._entries.pop(chat_id, None)
-        if entry and entry.timer:
-            entry.timer.cancel()
-        return entry
 
     def _sync_action_state(self, chat_id: int, action: str, has_tracker: bool) -> None:
         if not self._user_state:
@@ -242,14 +330,17 @@ class TaskTracker:
 
     def defer_for_rest(self, chat_id: int, start: datetime, end: datetime) -> None:
         with self._lock:
-            entry = self._entries.get(chat_id)
-            if not entry or not entry.timer:
+            entry_map = self._entries.get(chat_id)
+            if not entry_map:
                 return
             now = _utcnow()
             if not (start <= now < end):
                 return
-            entry.timer.cancel()
             delay = max(1.0, (end - now).total_seconds())
-            entry.timer = self._timer_factory(delay, self._send_reminder, (chat_id,))
-            entry.timer.start()
-            entry.waiting = False
+            for task_id, entry in entry_map.items():
+                if entry.timer:
+                    entry.timer.cancel()
+                entry.timer = self._timer_factory(delay, self._send_reminder, (chat_id, task_id))
+                entry.timer.start()
+                entry.waiting = False
+                entry.start_time = end

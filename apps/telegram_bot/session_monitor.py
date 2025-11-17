@@ -72,7 +72,7 @@ class TaskSessionMonitor:
         if active and self._tracker:
             self._tracker.stop_tracking(
                 active.get("chat_id", window.chat_id if window else 0),
-                ensure_name=active.get("task_name"),
+                task_hint=active.get("task_name"),
             )
         # 主动取消的提示由命令/工具负责输出
 
@@ -103,7 +103,7 @@ class TaskSessionMonitor:
             if self._tracker:
                 self._tracker.stop_tracking(
                     active.get("chat_id", window.chat_id),
-                    ensure_name=active.get("task_name"),
+                    task_hint=active.get("task_name"),
                 )
         self._notify(window)
         follow_up_task = active_task or self._resolve_task(window)

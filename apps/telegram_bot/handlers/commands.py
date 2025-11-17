@@ -94,7 +94,7 @@ class CommandRouter:
             self._handle_track(chat_id, text)
             return
         if lowered.startswith("/untrack"):
-            self._handle_untrack(chat_id)
+            self._handle_untrack(chat_id, text)
             return
         if lowered.startswith("/trackings"):
             self._handle_list_trackings(chat_id)
@@ -153,13 +153,30 @@ class CommandRouter:
             return
         self._tracker.start_tracking(chat_id, task, interval_minutes=interval_minutes)
 
-    def _handle_untrack(self, chat_id: int) -> None:
+    def _handle_untrack(self, chat_id: int, text: str) -> None:
         if not self._tracker:
             self._send_message(chat_id, escape_md("暂无跟踪任务。"))
             return
-        entry = self._tracker.stop_tracking(chat_id)
-        if not entry:
+        parts = text.split(maxsplit=1)
+        hint = parts[1].strip() if len(parts) > 1 else None
+        entries = self._tracker.list_active(chat_id)
+        if not entries:
             self._send_message(chat_id, escape_md("当前没有正在跟踪的任务。"))
+            return
+        if not hint and len(entries) > 1:
+            lines = [
+                f"- {escape_md(entry.task_name)} ｜ID: {escape_md(entry.task_id)}"
+                for entry in entries
+            ]
+            self._send_message(
+                chat_id,
+                "当前有多项跟踪，请通过 `/untrack <任务ID或关键词>` 指定需要取消的任务：\n"
+                + "\n".join(lines),
+            )
+            return
+        entry = self._tracker.stop_tracking(chat_id, task_hint=hint)
+        if not entry:
+            self._send_message(chat_id, escape_md("未找到匹配的跟踪任务。"))
             return
         self._send_message(
             chat_id,
@@ -175,7 +192,7 @@ class CommandRouter:
             self._send_message(chat_id, escape_md("当前没有跟踪任务。"))
             return
         lines = [
-            f"- [{escape_md(entry.task_name)}]({entry.task_url}) ｜等待反馈:{'是' if entry.waiting else '否'}"
+            f"- [{escape_md(entry.task_name)}]({entry.task_url}) ｜等待反馈:{'是' if entry.waiting else '否'} ｜ID:{escape_md(entry.task_id)}"
             for entry in entries
         ]
         self._send_message(chat_id, "\n".join(lines))
