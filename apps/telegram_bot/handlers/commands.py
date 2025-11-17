@@ -110,6 +110,9 @@ class CommandRouter:
         if lowered.startswith("/state"):
             self._handle_state(chat_id)
             return
+        if lowered.startswith("/board"):
+            self._handle_board(chat_id)
+            return
         if lowered.startswith("/next"):
             self._handle_next(chat_id)
             return
@@ -680,18 +683,22 @@ class CommandRouter:
         ]
         self._send_message(chat_id, "\n".join(lines))
 
+    def _handle_board(self, chat_id: int) -> None:
+        self._handle_next(chat_id)
+
     def _handle_next(self, chat_id: int) -> None:
-        lines = ["下一次主动提醒预估："]
+        lines = ["\n\n"]
         if self._proactivity:
             desc = self._proactivity.describe_next_prompts(chat_id)
             action = self._format_state_desc(desc.get("action"))
             mental = self._format_state_desc(desc.get("mental"))
             lines.append(f"🕹️ 行动状态：{action['status']}")
             if action["detail"]:
-                lines.append(f"  {action['detail']}")
+                lines.append(f"{action['detail']}")
+            lines.append("")
             lines.append(f"🧠 心理状态：{mental['status']}")
             if mental["detail"]:
-                lines.append(f"  {mental['detail']}")
+                lines.append(f"{mental['detail']}")
             question_text = self._format_question_desc(desc.get("question"))
         else:
             lines.append("🕹️ 行动状态：未启用")
@@ -834,7 +841,7 @@ class CommandRouter:
             start = format_beijing(window.start, "%m-%d %H:%M")
             end = format_beijing(window.end, "%m-%d %H:%M")
             status = "进行中" if window.start <= now <= window.end else "待开始"
-            lines.append(f"{emoji} {start} ~ {end} ｜{label}｜{status}")
+            lines.append(f"    {emoji} {start} ~ {end} \n         {label}｜{status}")
         return lines
 
     @staticmethod

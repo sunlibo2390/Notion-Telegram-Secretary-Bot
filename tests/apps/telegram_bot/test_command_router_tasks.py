@@ -206,3 +206,12 @@ def test_untrack_without_hint_prompts_when_multiple(tmp_path):
     router, client, _ = _build_router(tmp_path, tracker=tracker)
     router._handle_untrack(chat_id=1, text="/untrack")
     assert "请先执行 /trackings" in client.messages[-1]["text"]
+
+
+def test_board_command_alias_of_next(tmp_path):
+    router, client, _ = _build_router(tmp_path)
+    router._handle_board(chat_id=1)
+    board_text = client.messages[-1]["text"]
+    router._handle_next(chat_id=1)
+    next_text = client.messages[-1]["text"]
+    assert board_text == next_text
