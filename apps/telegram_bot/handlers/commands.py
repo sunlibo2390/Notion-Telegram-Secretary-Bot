@@ -698,12 +698,14 @@ class CommandRouter:
         else:
             lines.append("- 状态提醒：未启用")
         if self._tracker:
-            info = self._tracker.next_event(chat_id)
-            if info:
-                suffix = "（等待回复）" if info.get("waiting") else ""
-                lines.append(
-                    f"- 跟踪任务：{escape_md(info['task_name'])} → {self._format_due(info.get('due_time'))}{suffix}"
-                )
+            events = self._tracker.list_next_events(chat_id)
+            if events:
+                lines.append("- 跟踪任务：")
+                for info in events:
+                    suffix = "（等待回复）" if info.get("waiting") else ""
+                    lines.append(
+                        f"  · {escape_md(info['task_name'])} → {self._format_due(info.get('due_time'))}{suffix}"
+                    )
             else:
                 lines.append("- 跟踪任务：暂无")
         else:

@@ -276,39 +276,43 @@ class TaskTracker:
             return sorted(entry_map.values(), key=lambda item: item.start_time)
 
     def next_event(self, chat_id: int) -> Optional[Dict[str, Any]]:
+        events = self.list_next_events(chat_id)
+        return events[0] if events else None
+
+    def list_next_events(self, chat_id: int) -> list[Dict[str, Any]]:
         with self._lock:
             entry_map = self._entries.get(chat_id)
             if not entry_map:
-                return None
+                return []
             now = _utcnow()
-            best_entry: Optional[TrackerEntry] = None
-            best_due: Optional[datetime] = None
-            best_waiting = False
+            results: list[Dict[str, Any]] = []
+            resting = self._rest_service.is_resting(chat_id, now) if self._rest_service else False
+            resume_time = (
+                self._rest_service.next_resume_time(chat_id, now)
+                if resting and self._rest_service
+                else None
+            )
             for entry in entry_map.values():
-                if self._rest_service and self._rest_service.is_resting(chat_id, now):
-                    resume = self._rest_service.next_resume_time(chat_id, now)
-                    due = resume or now
+                waiting = entry.waiting
+                if resting:
+                    due = resume_time or now
                     waiting = True
                 elif entry.waiting and self._follow_up_interval > 0:
                     due = now + timedelta(seconds=self._follow_up_interval)
                     waiting = True
                 else:
                     due = entry.start_time + timedelta(seconds=entry.interval_seconds)
-                    waiting = False
-                if not best_due or due < best_due:
-                    best_due = due
-                    best_entry = entry
-                    best_waiting = waiting or entry.waiting
-            if not best_entry or not best_due:
-                return None
-            due_local = to_beijing(
-                best_due if best_due.tzinfo else best_due.replace(tzinfo=timezone.utc)
-            )
-            return {
-                "task_name": best_entry.task_name,
-                "due_time": due_local.isoformat(),
-                "waiting": best_waiting,
-            }
+                if not due.tzinfo:
+                    due = due.replace(tzinfo=timezone.utc)
+                results.append(
+                    {
+                        "task_name": entry.task_name,
+                        "due_time": due.isoformat(),
+                        "waiting": waiting,
+                    }
+                )
+            results.sort(key=lambda item: item["due_time"])
+            return results
 
     def _sync_action_state(self, chat_id: int, action: str, has_tracker: bool) -> None:
         if not self._user_state:
