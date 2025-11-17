@@ -722,12 +722,14 @@ class CommandRouter:
             lines.append("  · 未启用")
         lines.append("")
         lines.append("⏱️ 时间块：")
-        blocks = self._build_time_block_lines(chat_id)
-        if blocks:
-            lines.extend(blocks)
+        diff_lines = self._build_time_blocks_for_diff(chat_id)
+        if diff_lines:
+            lines.append("```diff")
+            lines.extend(diff_lines)
+            lines.append("```")
         else:
             lines.append("  · 暂无安排")
-        self._send_message(chat_id, "\n".join(lines), markdown=False)
+        self._send_message(chat_id, "\n".join(lines))
 
     def _handle_proactive_event(self, chat_id: int, event: Dict[str, Any]) -> None:
         if not self._agent:
@@ -830,9 +832,9 @@ class CommandRouter:
             return f"计划在 {due_text} 复盘"
         return "暂无"
 
-    def _build_time_block_lines(self, chat_id: int) -> List[str]:
+    def _build_time_blocks_for_diff(self, chat_id: int) -> List[str]:
         if not self._rest_service:
-            return ["  · 未启用"]
+            return []
         windows = self._rest_service.list_windows(chat_id, include_past=False)
         if not windows:
             return []
@@ -843,9 +845,10 @@ class CommandRouter:
             label = window.task_name or window.note or ("休息" if window.session_type == "rest" else "任务")
             start = format_beijing(window.start, "%m-%d %H:%M")
             end = format_beijing(window.end, "%m-%d %H:%M")
-            status = "进行中" if window.start <= now <= window.end else "待开始"
-            status_emoji = "✅" if status == "进行中" else "🕗"
-            lines.append(f"  · {emoji} {start} ~ {end} ｜{label}｜{status_emoji} {status}")
+            status = "active" if window.start <= now <= window.end else "upcoming"
+            prefix = "-" if status == "active" else "+"
+            status_label = "进行中" if status == "active" else "待开始"
+            lines.append(f"{prefix} {emoji} {start} ~ {end} ｜{label}｜{status_label}")
         return lines
 
     @staticmethod
