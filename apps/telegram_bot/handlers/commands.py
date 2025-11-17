@@ -725,12 +725,8 @@ class CommandRouter:
         lines.append("<b>⏱️ 时间块：</b>")
         time_blocks = self._build_time_blocks(chat_id)
         if time_blocks:
-            diff_content = "\n".join(
-                f"{'+' if status == 'active' else '-'} {text}" for status, text in time_blocks
-            )
-            lines.append(
-                f'<pre><code class="language-diff">{html.escape(diff_content)}</code></pre>'
-            )
+            for block in time_blocks:
+                lines.append(block)
         else:
             lines.append("  · 暂无安排")
         self._send_message(chat_id, "\n".join(lines), parse_mode="HTML")
@@ -843,14 +839,14 @@ class CommandRouter:
             return f"计划在 {due_text} 复盘"
         return "暂无"
 
-    def _build_time_blocks(self, chat_id: int) -> List[tuple[str, str]]:
+    def _build_time_blocks(self, chat_id: int) -> List[str]:
         if not self._rest_service:
             return []
         windows = self._rest_service.list_windows(chat_id, include_past=False)
         if not windows:
             return []
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
-        result: List[tuple[str, str]] = []
+        result: List[str] = []
         for window in windows[:5]:
             emoji = "🍀" if window.session_type == "rest" else "🛠️"
             label = window.task_name or window.note or ("休息" if window.session_type == "rest" else "任务")
@@ -859,12 +855,16 @@ class CommandRouter:
                 f"{format_beijing(window.end, '%m-%d %H:%M')} ｜{html.escape(label)}"
             )
             status = "active" if window.start <= now <= window.end else "upcoming"
-            if status == "active":
-                line += " ｜进行中"
-            else:
-                line += " ｜待开始"
-            result.append((status, line))
+            badge = self._status_badge(status)
+            line += f" ｜{badge}"
+            result.append(line)
         return result
+
+    @staticmethod
+    def _status_badge(status: str) -> str:
+        if status == "active":
+            return '<code style="color:#2ecc71">进行中</code>'
+        return '<code style="color:#e67e22">待开始</code>'
 
     @staticmethod
     def _format_rest_window(window: RestWindow) -> str:
