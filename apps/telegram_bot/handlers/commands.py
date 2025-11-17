@@ -450,6 +450,14 @@ class CommandRouter:
             if action == "update":
                 self._handle_task_update(chat_id, text)
                 return
+            if action == "light":
+                limit = 10
+                for token in parts[2:]:
+                    if token.isdigit():
+                        limit = max(1, min(30, int(token)))
+                        break
+                self._handle_tasks_light(chat_id, limit=limit)
+                return
             if action in {"projects", "project", "byproject", "group"}:
                 per_project_limit = 5
                 for token in parts[2:]:
@@ -497,6 +505,33 @@ class CommandRouter:
             #     lines.append(f"  摘要：{preview}")
             lines.append("")
         lines.append(escape_md("提示：/tasks update <序号> status=进行中 或 /tasks delete <序号>（仅自建任务）"))
+        self._send_message(chat_id, "\n".join(lines).strip(), markdown=True)
+
+    def _handle_tasks_light(self, chat_id: int, limit: int = 10) -> None:
+        if not self._task_repo:
+            self._send_message(chat_id, escape_md("任务数据不可用。"))
+            return
+        tasks = self._task_repo.list_active_tasks()
+        if not tasks:
+            self._task_snapshot.pop(chat_id, None)
+            self._send_message(chat_id, escape_md("当前没有待办任务。"))
+            return
+        def sort_key(task):
+            priority_order = {"Urgent": 0, "High": 1, "Medium": 2, "Low": 3}
+            return (
+                priority_order.get(task.priority, 99),
+                task.due_date or "9999-12-31",
+                task.name.lower(),
+            )
+        sorted_tasks = sorted(tasks, key=sort_key)[:limit]
+        self._task_snapshot[chat_id] = [task.id for task in sorted_tasks]
+        lines = ["*轻量任务视图*"]
+        for idx, task in enumerate(sorted_tasks, start=1):
+            url = task.page_url or f"https://www.notion.so/{task.id.replace('-', '')}"
+            name = escape_md(task.name)
+            project = escape_md(task.project_name or "未归类")
+            lines.append(f"{idx}. [{name}]({url})")
+            lines.append(f"   项目：{project}")
         self._send_message(chat_id, "\n".join(lines).strip(), markdown=True)
 
     def _handle_tasks_grouped(self, chat_id: int, per_project_limit: int = 5) -> None:
@@ -818,7 +853,7 @@ class CommandRouter:
         detail = (
             f"等待反馈，将在 {due_text} 追问"
             if data.get("pending")
-            else f"记录有效，将在 {due_text} 再次确认"
+            else f"记录有效，将在 {due_text} 确认"
         )
         return {"status": status, "detail": detail}
 

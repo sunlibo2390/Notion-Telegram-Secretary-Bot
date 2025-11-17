@@ -208,6 +208,13 @@ def test_untrack_without_hint_prompts_when_multiple(tmp_path):
     assert "请先执行 /trackings" in client.messages[-1]["text"]
 
 
+def test_tasks_light_outputs_minimal_list(tmp_path):
+    router, client, _ = _build_router(tmp_path)
+    router._handle_tasks(chat_id=1, text="/tasks light")
+    text = client.messages[-1]["text"]
+    assert "项目：" in text
+    assert "状态:" not in text
+
 def test_board_command_alias_of_next(tmp_path):
     router, client, _ = _build_router(tmp_path)
     router._handle_board(chat_id=1)
