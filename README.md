@@ -1,168 +1,189 @@
 # Notion Secretary
 
-AI secretary that同步 Notion 数据库、深度理解 `docs/user_profile_doc.md` 中的画像，并在 Telegram 中扮演一名“强硬秘书”。与传统 if/else 规则不同，本项目以 **OpenAI 大模型** 为核心：所有提醒、决策与对话策略均由 LLM Agent 生成，Bot 只是负责采集上下文、调用“技能”（task summary、日志补录等）并执行 LLM 的指令。
+> Telegram assistant that synchronizes Notion tasks/logs, persists user behavior, and drives reminders/automation via LLM tools.  
+> All commands and reminders flow through the Agent loop: the bot collects context, the LLM decides which “skill” to invoke, and the bot executes it deterministically.
 
-## 项目目标
-- 将 Notion 中的任务、项目与日志数据整理成结构化视图，并与用户画像交叉引用。
-- 通过 Telegram 建立实时对话渠道，支持状态同步、任务追踪和强制提醒。
-- 将数据采集、智能决策、消息交互拆分成清晰的模块，便于多成员协作与持续迭代。
+---
 
-## 组织结构规划
+## 🌟 Key Features
+
+| 能力 | 说明 |
+| --- | --- |
+| Notion 同步 | `database_collect.py` / `/update` 拉取数据库 → processors 标准化 → repositories 缓存。 |
+| Telegram Bot | `/tasks`、`/logs`、`/track`, `/trackings`, `/board` 等命令 + 自然语言对话；支持批量删除、精简视图等。 |
+| LLM Agent | `core/llm/agent.py` + `core/llm/tools.py` 实现 ReAct/工具调用；所有指令都走模型判定。 |
+| 跟踪持久化 | `TaskTracker` 将所有跟踪任务存入 `history_dir/tracker_entries.json`，重启后自动恢复。 |
+| Rest / 勿扰 | `/blocks` 创建休息/任务窗口，`TaskTracker` 会避开休息期，`ProactivityService` 也会暂停追问。 |
+| 配置与日志 | `config/settings.toml` 控制 Notion/Telegram/LLM/时区，所有日志写入 `logs/`。 |
+
+更多细节请参考：`docs/developer_overview.md`（架构）、`docs/development_guide.md`（接口契约）、`docs/user_manual.md`（部署与指令）。
+
+---
+
+## 🗂 目录结构
+
 ```
 notion_secretary/
-├── apps/
-│   └── telegram_bot/          # 基于 python-telegram-bot / aiogram 的入口
-│       ├── bot.py             # Bot 启动脚本，注册 handlers
-│       ├── handlers/          # 命令、回调、消息流逻辑
-│       ├── keyboards/         # 内联/回复键盘定义
-│       ├── middlewares/       # 会话态、限流、权限等
-│       └── dto.py             # Telegram 消息 <-> 领域对象转换
-├── core/
-│   ├── domain/                # 领域模型：Task, Project, LogEntry, Intervention, UserProfile
-│   ├── services/              # 任务聚合、日志写入、干预执行等“技能”实现
-│   ├── repositories/          # 从 processed JSON/DB 读取任务、日志等
-│   ├── workflows/             # LLM 触发的高层流程（每日检查、倒计时、主动干预）
-│   └── llm/                   # Prompt 模板、技能注册、OpenAI Client/agent loop
-├── data_pipeline/
-│   ├── collectors/            # Notion 数据拉取（database_collect 重构版）
-│   ├── processors/            # Projects/Tasks/Logs 处理器
-│   ├── transformers/          # Markdown 转换、字段清洗
-│   ├── notion_api.py          # 统一的 Notion API 客户端
-│   └── storage/               # raw_json / processed / cache
-├── prompts/                   # 对话、summary、干预话术模板
-├── response_examples/         # Telegram 交互示例
-├── config/
-│   └── settings.example.toml    # 配置模板，复制为 settings.toml 使用
-├── docs/
-│   ├── user_profile_doc.md      # 现有人物画像
-│   ├── telegram_architecture.md # Telegram bot 设计与场景细节
-│   └── development_guide.md     # 接口契约、场景流程、配置与测试指引
-├── scripts/
-│   ├── run_bot.py             # 启动 Telegram bot
-│   └── sync_databases.py      # 手动触发采集与处理
-├── tests/                     # 单元/集成测试
-└── infra/
-    └── scheduler/             # 预留后台 cron / APScheduler 任务
+├── apps/telegram_bot/         # Bot runtime: handlers, tracker, session monitor
+├── core/                      # Domain models, services, repositories, LLM glue
+├── data_pipeline/             # Notion collectors/processors/transformers/storage
+├── docs/                      # 用户手册 + 开发者文档（详见 docs/README.md）
+├── infra/                     # 配置解析、Notion sync orchestrator
+├── scripts/                   # run_bot.py / sync_databases.py
+├── tests/                     # pytest suites
+└── databases/                 # 运行时数据目录（raw_json/json/telegram_history 等）
 ```
 
-> `database_collect.py` 会在采集后依次执行 `data_pipeline.processors` 中的 Projects / Tasks / Logs 处理器，并已将历史 `block2md.py`、`block_children_query.py` 等脚本内嵌为模块化依赖。Bot 启动后同样会按照 `notion.sync_interval` 在后台定时触发 `NotionSyncService`（内部也会检查 `last_updated.txt`，避免频繁拉取），保持 processed 数据的新鲜度。
+---
 
-## 数据流（Agent 视角）
-1. **Collector**：轮询 Notion API，写入 `data_pipeline/storage/raw_json/`.
-2. **Processor**：`data_pipeline.processors` 使用统一的 `NotionAPI` + Markdown transformer 标准化内容，落地 `processed/*.json`.
-3. **Repository / Memory**：`core/repositories/*` + `docs/user_profile_doc.md` 组成 Agent 的 “事实记忆”。
-4. **Agent Loop**
-   - `context_builder` 汇总 Telegram 历史、最新任务、画像特征
-   - `core/llm/agent.py` 组装 prompt 并调用 OpenAI Chat Completions（含 function-calling）
-   - LLM 输出 `Action`：例如 `summarize_tasks`, `record_log`, `enforce_focus`
-   - 对应 `core/services/*` 执行该 Action，把结果回写给 LLM 作为 `Observation`
-   - LLM 最终产出 `FinalMessage` 或继续迭代
-5. **Telegram Bot**：将 `FinalMessage` 发给用户，若 LLM 要求“再跟进”则继续循环。
+## ⚙️ 配置（config/settings.toml）
 
-## Telegram & Agent 交互
-- **统一入口**：用户输入（指令或自然语言）均进入 Agent Loop，LLM 决定是否调用某个技能；这样 `/tasks` 可以衍生出“继续质问”“安排 follow-up”等智能行为。
-- **主动推送**：`infra/scheduler` 触发 workflow → 调用 LLM 生成 briefing 文本或干预话术 → Bot 推送。
-- **多轮上下文**：`apps/telegram_bot/history/HistoryStore` 持久化用户与 Bot 消息，LLM 在每轮 prompt 中可访问最近 N 条历史 + 长期画像。
-- **可靠性**：仍采用 `getUpdates` 长轮询。Telegram 只返回用户留言，因此 `TelegramBotClient.send_message` 必须保存响应体用于复原历史。更多细节见 `docs/telegram_architecture.md`.
-- **指令小抄**：
-  - `/track <任务ID> [分钟]`：开启任务跟踪；未指定时默认 25 分钟提醒，可按需定制首个提醒间隔。
-  - `/tasks light [N]` / `/tasks group light [N]`：仅展示任务名称及所属项目（可按项目分组），便于快速浏览。
-  - `/trackings`：查看当前会话内正在跟踪的任务（按序号输出，可直接配合 `/untrack <序号>` 操作）。
-  - `/untrack [序号/关键词]`：取消某个跟踪任务；若存在多个任务，建议先执行 `/trackings` 后再依据序号操作。
-  - `/logs [N]`：查看最近 N 条日志（默认 5，最多 20），便于快速回顾记录。
-  - `/logs delete <序号...>`：在查看日志后，可删除一个或多个序号对应的日志。
-  - `/state` / `/next`：查看当前记录的行动/心理状态以及下一次主动提醒的预计时间（含跟踪任务、状态检查）。
-  - `/board`：与 `/next` 相同的全局状态看板。
-  - `/logs update <序号> <内容>`：更新指定日志的内容（可附 `任务 XXX：...` 自动重绑任务）。
-  - `/update`：立即从 Notion 拉取项目/任务/日志，刷新本地缓存。
-- **时间块管理**：`/blocks` 统一展示「休息」与「任务专注」时间段；对 Bot 说 “14:00-16:00 专注 Magnet 代码” 会创建任务窗口，并自动开启该任务的追踪，到点提醒你收尾，避免任务无限拖延。
-- **状态管控**：行动状态只会在“处于任务时间块 + 正在跟踪”时成为“推进中”，休息结束或任务块结束后自动回到 `unknown`。当行动/心理状态为 `unknown` 或已过期时，每隔 `state_unknown_retry_seconds`（默认 2 分钟）会持续追问。
-- **日志智能**：Agent 触发 `record_log` 工具时会结合当前对话与近期历史自动匹配任务；若需要修订，可使用 `/logs update` 或 `update_log` 工具重新绑定。
-- **本地记忆**：手动创建的任务写入 `json/agent_tasks.json`，日志写入 `json/agent_logs.json`，即使执行 `/update` 或重新跑 `scripts/sync_databases.py` 也不会被覆盖。
-- **多渠道同步**：在 `config/settings.toml` 中配置 `[wecom].webhook_url` 后，Agent 的每条回复都会镜像到对应的企业微信机器人，方便在其他终端实时关注。
-- **主动干预**（`apps/telegram_bot/proactivity.py`）：
-  - 若 30 分钟未检测到有效进展描述，将主动 ping 用户并要求说明当前任务与预计完成时间。
-  - 发送带问句的消息后 3 分钟仍未收到回复，会自动再次提醒，直到用户反馈。
-  - 若用户连续多条回复均无进展信息，Agent 会直接输出 `【经评估，讨论已无意义】` 终止闲聊，迫使其回到主线。
+```toml
+[general]
+timezone_offset_hours = 8              # 本地时区，默认 UTC+8，可设为 -12~+14
 
-## 配置与环境变量
-将所有敏感信息写入 `config/settings.toml`（不要硬编码在源码内）：
+[paths]
+data_dir = "D:/Projects/notion_secretary/databases"
+database_ids_path = "database_ids.json"
 
-| 配置键 | 用途 |
-| --- | --- |
-| `notion.api_key` | 访问 Notion API |
-| `notion.sync_interval` | 周期性同步间隔（秒） |
-| `notion.api_version` | Notion API 版本号，默认 `2022-06-28` |
-| `paths.data_dir` | Raw/processed/telegram_history 数据根目录 |
-| `paths.database_ids_path` | `database_ids.json` 所在路径 |
-| `general.timezone_offset_hours` | 运行时使用的本地时区（小时偏移，默认 8 表示 UTC+8） |
-| `telegram.token` | Telegram Bot Token |
-| `telegram.admin_ids` | 可使用管理命令的用户 ID |
-| `telegram.poll_timeout` | `getUpdates` 长轮询的超时时间 |
-| `llm.provider` / `llm.base_url` | LLM 服务端点（默认 OpenAI 兼容接口） |
-| `llm.model` | Agent 所使用的模型（如 `gpt-4o-mini`、`gpt-4.1` 等） |
-| `llm.temperature` | 控制秘书语气、创造力的参数 |
+[notion]
+api_key = "secret_xxx"
+sync_interval = 1800                    # /update 背景轮询间隔
+force_update = false
+api_version = "2022-06-28"
 
-## 快速开始
-1. 创建虚拟环境并安装依赖（示例）：
+[telegram]
+token = "8096:ABCDEF"                   # BotFather 获取
+poll_timeout = 25
+admin_ids = [6604771431]
+
+[llm]
+provider = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+temperature = 0.3
+api_key = "sk-..."
+
+[tracker]
+interval_seconds = 1500                 # 默认跟踪间隔（秒），自定义命令可覆盖
+follow_up_seconds = 600
+
+[proactivity]
+state_check_seconds = 300
+state_stale_seconds = 3600
+state_prompt_cooldown_seconds = 600
+question_follow_up_seconds = 600
+state_unknown_retry_seconds = 120
+```
+
+> **敏感文件**（settings、user_profile、databases/**、tracker_entries.json 等）已加入 `.gitignore`，请勿提交。
+
+---
+
+## 🚀 快速上手
+
+1. **安装依赖**
    ```bash
-   uv venv
+   python -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-2. 复制配置模板：
+2. **复制配置**
    ```bash
    cp config/settings.example.toml config/settings.toml
    ```
-3. 在 `config/settings.toml` 中填写 Notion、Telegram、LLM 等凭据。
-4. 更新 `database_ids.json`，然后运行一次同步：
+3. **填充 Notion database IDs** → `database_ids.json`
+4. **首次同步数据**
    ```bash
    python scripts/sync_databases.py --force
    ```
-5. 启动 Telegram bot：
+5. **启动 Telegram Bot**
    ```bash
    python scripts/run_bot.py
    ```
 
-## 开发约定
-- **数据层**：任何直接访问 Notion 的操作放在 `data_pipeline/collectors`，避免散落在 bot handlers 中。
-- **领域层**：`core/domain` 中的对象应保持纯粹（不依赖 Telegram/Notion SDK），便于测试。
-- **服务层**：先处理 deterministic 逻辑，再调用 LLM。所有 LLM prompt 模板集中在 `prompts/`.
-- **日志与监控**：Bot 与数据同步脚本统一使用 logging 配置输出，写入 `logs/`.
-- **测试**：重要流程（任务筛选、提醒策略）需要 `tests/` 中的单元测试，Telegram 交互可用 fixture 模拟；具体覆盖点与接口契约见 `docs/development_guide.md`.
-
-## 后续迭代方向
-- 将 processed JSON 替换为 SQLite/PostgreSQL，支持多用户。
-- 引入 `apscheduler` 实现分钟级定时任务。
-- Telegram 端接入多模态（语音/图片）以提高记录效率。
-- 构建 web 控制台查看实时状态、手动干预历史。
+> `/update` 会拉起后台线程同步 Notion 数据，不会阻塞其他命令。
 
 ---
 
-> 更多细节：
-> - Telegram 长轮询及历史拼接：`docs/telegram_architecture.md`
-> - 接口契约、场景流程、配置与测试：`docs/development_guide.md`
-> - 用户画像：`docs/user_profile_doc.md`
+## 💬 常用命令
 
-## 时间与主动策略说明
+| 命令 | 说明 |
+| --- | --- |
+| `/tasks [N]` | 任务列表，带状态/优先级/截止时间。自建任务无链接。 |
+| `/tasks light [N]` / `/tasks group light [N]` | 精简视图：只展示任务名+项目，可按项目分组。 |
+| `/tasks delete <序号...>` | 批量删除自建任务（Notion 任务不可删）。 |
+| `/logs [N]` | 查看最近 N 条日志（纯文本输出，避免 Telegram Markdown 错误）。 |
+| `/logs delete <序号...>` | 批量删除最近 `/logs` 输出中选定的日志。 |
+| `/track <任务ID/名称> [分钟]` | 启动跟踪，任意 ≥5 分钟间隔（LLM 会自动换算 8 小时→480 分钟）。 |
+| `/trackings` | 列出跟踪任务，含“下一次提醒”时间；`/untrack <序号/关键词>` 取消。 |
+| `/board` / `/next` | 综合看板：行动/心理状态、提问追踪、所有跟踪任务时间、时间块 diff。 |
+| `/blocks` / `/blocks cancel <序号>` | 查看或取消休息/任务时间块。 |
+| `/update` | 后台同步 Notion → processors → repositories（执行结果会另行通知）。 |
 
-- **统一时区**：Agent 面向用户展示的所有时间（日志、提醒、`/blocks`、`/next` 等）均转换为北京时间（UTC+8），与代码中的 `core/utils/timezone.py` 保持一致，避免“本地时间/服务器时间”混淆。
-- **休息与勿扰**：通过 `/blocks` 或 LLM 的 `rest_*` 工具创建的窗口会暂停主动提醒、追问和跟踪计时，恢复后自动顺延。
-- **状态追问**：`state_unknown_retry_seconds` 控制 `unknown` 或过期状态下的追问频率（默认 120 秒），即使 `state_check_seconds` 较大，也会在该间隔内反复催促，直到用户给出有效状态。
+详尽命令说明见 `docs/user_manual.md`。
 
-### `[proactivity]` 配置项
+---
 
-`config/settings.toml` 中的 `[proactivity]` 决定 Agent 主动发言与追问的节奏：
+## 🔁 数据流与运行
 
-| 参数 | 默认值 | 作用 |
-| --- | --- | --- |
-| `state_check_seconds` | 300 | 巡检间隔；到点会重新检查行动 / 心理状态是否需要更新 |
-| `state_stale_seconds` | 3600 | 状态超过该时长未更新将被标记为“失效”，下一次巡检会发起询问 |
-| `state_prompt_cooldown_seconds` | 600 | 同一状态被追问后，至少等待该冷却时间才会再次催促 |
-| `question_follow_up_seconds` | 600 | Agent 提问后若未收到有效回复，将按此间隔重复追问（休息期自动顺延） |
+1. **Notion -> 本地**：`NotionCollector` 根据 `last_updated.txt` 判定是否拉取 → processors（projects/tasks/logs） → `databases/json`.
+2. **本地 -> Repositories**：`TaskRepository` `LogRepository` `ProjectRepository` 读取 processed JSON + 自建缓存（`agent_tasks.json`/`agent_logs.json`）。
+3. **Agent Loop**：`LLMAgent` 汇总 Telegram 历史 + 画像 + repositories 数据 → 调用工具 → 生成回复或下一步指令。
+4. **Tracker/Rest**：`TaskTracker` 将活动持久化，遇到休息窗口只在必要时顺延；`ProactivityService` 在后台监控状态并触发 `/next`/追问。
+5. **Telemetry & Logs**：所有命令输出存入 `databases/telegram_history/`，tracker 状态写入 `history_dir/tracker_entries.json`。
 
-> 这些参数在 `apps/telegram_bot/proactivity.py` 中被 `ProactivityService` 使用：  
-> - `state_check_seconds` 设定轮询定时器；  
-> - `state_stale_seconds` 与 `state_prompt_cooldown_seconds` 共同判断何时需要再次询问行动/心理状态；  
-> - `question_follow_up_seconds` 控制“提问后未回复”的追问定时。  
-> 所有判断都会先检查是否处于休息窗口，以确保勿扰策略生效。
+---
+
+## 🧪 测试与调试
+
+```bash
+python -m pytest
+```
+
+重点用例：
+* `tests/apps/telegram_bot/test_command_router_tasks.py`：命令路由、批量删除、跟踪序号等。
+* `tests/apps/telegram_bot/test_tracker.py`：多任务跟踪、休息窗口、持久化恢复。
+* `tests/core/test_llm_agent.py`：LLM 工具循环。
+
+---
+
+## 📚 文档索引
+
+| 文件 | 内容 |
+| --- | --- |
+| `docs/README.md` | 文档导航。 |
+| `docs/developer_overview.md` | 架构/数据流/扩展注意事项。 |
+| `docs/development_guide.md` | 接口契约、流程与测试策略。 |
+| `docs/user_manual.md` | 部署与指令说明。 |
+| `docs/telegram_architecture.md` | 长轮询、历史拼接、主动策略。 |
+
+用户画像 (`docs/user_profile_doc*.md`) 含隐私信息，实际部署时请在本地维护，不要提交。
+
+---
+
+## ❓ FAQ
+
+1. **命令被卡住？**  
+   `/update`、Notion 同步等耗时操作均在后台线程执行，如仍阻塞请检查是否有长时间运行的自定义逻辑。
+
+2. **日志展示 400 错误？**  
+   `/logs` 输出已改为纯文本（`markdown=False`）。如二次开发中重新启用 Markdown，请务必转义超长内容。
+
+3. **跟踪与休息冲突？**  
+   `TaskTracker` 会在启动时检查当前是否处于休息期，仅当默认提醒会落入休息窗口时才顺延，否则保持原提醒时间；`/trackings` 与 `/board` 显示的时间一致。
+
+4. **时区如何设置 UTC-12？**  
+   在 `config/settings.toml` 设置 `[general].timezone_offset_hours = -12`（或设置环境变量 `TIMEZONE_OFFSET_HOURS=-12`）。启动时会自动调用 `configure_timezone(-12)`。
+
+---
+
+## 🤝 贡献指南
+
+1. 修改前阅读 `docs/developer_overview.md` 和 `docs/development_guide.md`。
+2. 遵循模块边界：数据采集 → processors → repositories → services → handlers → agent；不要跨层访问。
+3. 新增命令要考虑 Telegram Markdown 兼容性；需要输出大量文本时可改为纯文本。
+4. 所有长耗时操作（Notion 同步、批量任务处理）都应使用后台线程或异步流程。
+5. 提交前运行 `pytest`，敏感文件确保未加入版本控制。
+
+欢迎 issue / PR，内置文档与测试可帮助你快速定位改动影响。祝 hacking 愉快！
