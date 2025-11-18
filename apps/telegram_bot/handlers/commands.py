@@ -603,6 +603,7 @@ class CommandRouter:
             safe_project = escape_md(project_name or "未归类")
             lines.append(f"{idx}. {safe_project}")
             names = [
+                f"  - [{escape_md(task.name)}]({task.page_url})" if task.page_url else
                 f"  - {escape_md(task.name)}"
                 for task in sorted(bucket, key=sort_key)[:per_project_limit]
             ]
@@ -931,11 +932,9 @@ class CommandRouter:
         note = f"｜备注:{window.note}" if window.note else ""
         start = format_beijing(window.start, "%m-%d %H:%M")
         end = format_beijing(window.end, "%m-%d %H:%M")
-        status_map = {"pending": "待确认", "approved": "已批准", "cancelled": "已取消", "rejected": "已拒绝"}
-        status = status_map.get(window.status, window.status)
         if window.session_type == "task":
             task_label = window.task_name or window.task_id or "未命名任务"
             prefix = f"🛠️ {task_label}"
         else:
             prefix = "🍀"
-        return f"{prefix} {start} ~ {end} ｜状态:{status}{note}"
+        return f"{prefix} {start} ~ {end}{note}"
