@@ -1,5 +1,6 @@
 {
-    "tasks": "29b21ebb29a6800a8518cb381f8442d4",
-    "logs": "29b21ebb29a680668326f0ff7a04cba3",
-    "projects": "25621ebb29a680fa8288d958f9c9f351"
+    "tasks": "<tasks notion database id>",
+    "logs": "<logs notion database id>",
+    "projects": "<projects notion database id>"
+
 }
