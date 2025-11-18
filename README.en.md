@@ -56,7 +56,7 @@ api_version = "2022-06-28"
 [telegram]
 token = "123456:ABCDE"
 poll_timeout = 25
-admin_ids = [6604771431]
+admin_ids = [123456789]
 
 [llm]
 provider = "openai"
