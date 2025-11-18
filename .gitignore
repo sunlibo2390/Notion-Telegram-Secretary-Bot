@@ -12,3 +12,4 @@ databases/
 databases/**
 tracker_entries.json
 history.json
+database_ids.json

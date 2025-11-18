@@ -1,5 +1,7 @@
 # Notion Secretary 用户手册
 
+[English Version](user_manual.en.md)
+
 本文覆盖部署前准备、运行步骤、Telegram 交互方式及常见问题，帮助最终用户快速上手秘书系统。
 
 ## 1. 环境准备

@@ -1,5 +1,7 @@
 # Development Guide
 
+[English Version](development_guide.en.md)
+
 围绕 Telegram long-polling Bot 与 Notion 数据同步，本文在 README 的基础上细化接口契约、场景流程、配置与测试策略，方便多角色协作。如果你需要先了解整体架构、数据流和运行约束，请先阅读 `docs/developer_overview.md`，再回到本文查看各模块的契约细节。
 
 ## 1. 接口契约
@@ -81,7 +83,33 @@ class HistoryStore:
 
 ## 3. 配置与部署
 
-### 3.1 `config/settings.toml`
+### 3.1 Notion 数据库字段
+请确保以下属性在 Notion 数据库中存在，并与 processors 对应（README《Notion 数据库字段》章节也列出了同样的表格，便于部署人员快速核对）：
+
+#### Tasks 数据库
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `Name` | title | 任务名称 |
+| `Priority` | select | 优先级 |
+| `Status` | status | 状态字段，用于过滤 Done/Dormant |
+| `Projects` | relation | 关联的项目卡片 |
+| `Due Date` | date | 截止日期（processors 读取 `date.start`） |
+| `Subtasks` | relation | 子任务列表，processors 会回填 `subtask_names` |
+
+#### Projects 数据库
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `Name` | title | 项目名称 |
+| `Status` | status | 项目状态（非 Done 才保留） |
+
+#### Logs 数据库
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `Name` | title | 日志标题 |
+| `Status` | status | 日志状态（非 Done/Dormant 才保留） |
+| `Task` | relation | 关联任务，用于展示任务名称 |
+
+### 3.2 `config/settings.toml`
 ```toml
 [paths]
 data_dir = "D:/Projects/codex_test/notion_secretary/databases"

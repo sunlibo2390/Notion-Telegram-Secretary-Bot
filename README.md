@@ -1,7 +1,9 @@
 # Notion Secretary
 
-> Telegram assistant that synchronizes Notion tasks/logs, persists user behavior, and drives reminders/automation via LLM tools.  
-> All commands and reminders flow through the Agent loop: the bot collects context, the LLM decides which “skill” to invoke, and the bot executes it deterministically.
+[English Version](README.en.md)
+
+> 面向 Telegram 的全能助理：实时同步 Notion 任务/日志，记录用户行为，并通过 LLM 技能驱动提醒与自动化。  
+> 所有命令与提醒都会进入 Agent 回路：Bot 负责收集上下文，LLM 选择应调用的“技能”，再由 Bot 确定性地执行。
 
 ---
 
@@ -24,14 +26,14 @@
 
 ```
 notion_secretary/
-├── apps/telegram_bot/         # Bot runtime: handlers, tracker, session monitor
-├── core/                      # Domain models, services, repositories, LLM glue
-├── data_pipeline/             # Notion collectors/processors/transformers/storage
-├── docs/                      # 用户手册 + 开发者文档（详见 docs/README.md）
-├── infra/                     # 配置解析、Notion sync orchestrator
-├── scripts/                   # run_bot.py / sync_databases.py
-├── tests/                     # pytest suites
-└── databases/                 # 运行时数据目录（raw_json/json/telegram_history 等）
+├── apps/telegram_bot/         # Bot 运行时：命令处理器、跟踪器、会话监控
+├── core/                      # 领域模型、服务、仓库与 LLM glue 逻辑
+├── data_pipeline/             # Notion 抽取/处理/转换/存储流水线
+├── docs/                      # 用户手册与开发者文档（参见 docs/README.md）
+├── infra/                     # 配置解析、Notion 同步编排
+├── scripts/                   # run_bot.py / sync_databases.py 等脚本
+├── tests/                     # pytest 测试
+└── databases/                 # 运行期数据（raw_json/json/telegram_history 等）
 ```
 
 ---
@@ -43,7 +45,7 @@ notion_secretary/
 timezone_offset_hours = 8              # 本地时区，默认 UTC+8，可设为 -12~+14
 
 [paths]
-data_dir = "D:/Projects/notion_secretary/databases"
+data_dir = "./databases"
 database_ids_path = "database_ids.json"
 
 [notion]
@@ -53,9 +55,9 @@ force_update = false
 api_version = "2022-06-28"
 
 [telegram]
-token = "8096:ABCDEF"                   # BotFather 获取
+token = "123456:ABCDE"                  # BotFather 获取
 poll_timeout = 25
-admin_ids = [6604771431]
+admin_ids = [ <telegram user id> ]                  # GetUserID 获取
 
 [llm]
 provider = "openai"
@@ -77,6 +79,37 @@ state_unknown_retry_seconds = 120
 ```
 
 > **敏感文件**（settings、user_profile、databases/**、tracker_entries.json 等）已加入 `.gitignore`，请勿提交。
+
+---
+
+## 🗃️ Notion 数据库字段
+
+为了保证 processors 与本地缓存工作正常，Notion 中的数据库需要提供下列属性（大小写需保持一致）：
+
+### Tasks 数据库
+| 字段 | 类型 | 用途 |
+| --- | --- | --- |
+| `Name` | title | 任务标题，`TaskRepository` 用于展示和查找 |
+| `Priority` | select | 优先级标签，用于排序 |
+| `Status` | status | 用于过滤完成/休眠任务 |
+| `Projects` | relation | 关联项目，`/tasks group` 需要 |
+| `Due Date` | date | 截止时间，`/next` 与提醒逻辑参考 |
+| `Subtasks` | relation | 反查子任务名并在提示中展示 |
+
+### Projects 数据库
+| 字段 | 类型 | 用途 |
+| --- | --- | --- |
+| `Name` | title | 项目名称 |
+| `Status` | status | 判定项目是否激活 |
+
+### Logs 数据库
+| 字段 | 类型 | 用途 |
+| --- | --- | --- |
+| `Name` | title | 日志标题／摘要 |
+| `Status` | status | 过滤 Done/Dormant 日志 |
+| `Task` | relation | 用于 `/logs` 里展示关联任务 |
+
+对应的数据库 ID 统一写在 `database_ids.json`（已被 `.gitignore` 忽略）；如果需要自定义路径，可以在 `config/settings.toml` 的 `[paths].database_ids_path` 中覆盖。
 
 ---
 
@@ -152,11 +185,11 @@ python -m pytest
 
 | 文件 | 内容 |
 | --- | --- |
-| `docs/README.md` | 文档导航。 |
-| `docs/developer_overview.md` | 架构/数据流/扩展注意事项。 |
-| `docs/development_guide.md` | 接口契约、流程与测试策略。 |
-| `docs/user_manual.md` | 部署与指令说明。 |
-| `docs/telegram_architecture.md` | 长轮询、历史拼接、主动策略。 |
+| [`docs/README.md`](docs/README.md) | 文档导航。 |
+| [`docs/developer_overview.md`](docs/developer_overview.md) | 架构/数据流/扩展注意事项。 |
+| [`docs/development_guide.md`](docs/development_guide.md) | 接口契约、流程与测试策略。 |
+| [`docs/user_manual.md`](docs/user_manual.md) | 部署与指令说明。 |
+| [`docs/telegram_architecture.md`](docs/telegram_architecture.md) | 长轮询、历史拼接、主动策略。 |
 
 用户画像 (`docs/user_profile_doc*.md`) 含隐私信息，实际部署时请在本地维护，不要提交。
 

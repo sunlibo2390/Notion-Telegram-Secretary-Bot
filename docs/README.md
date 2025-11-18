@@ -1,11 +1,13 @@
 # Docs Overview
 
+[English Version](README.en.md)
+
 | 文件 | 说明 |
 | --- | --- |
-| `user_manual.md` | 面向用户的部署&指令手册：覆盖环境准备、运行顺序、常用命令、FAQ。 |
-| `development_guide.md` | 接口契约与测试策略，对应 Handler/Service/Repository 的签名约束。 |
-| `developer_overview.md` | 当前架构、数据流、任务追踪持久化与扩展注意事项的总览。 |
-| `telegram_architecture.md` | Telegram 长轮询、历史拼接、主动策略等细节。 |
+| `user_manual.md` / `user_manual.en.md` | 用户部署 & 指令手册（中 / 英）。 |
+| `development_guide.md` / `development_guide.en.md` | 接口契约与测试策略（中 / 英）。 |
+| `developer_overview.md` / `developer_overview.en.md` | 架构、数据流、扩展注意事项（中 / 英）。 |
+| `telegram_architecture.md` / `telegram_architecture.en.md` | Telegram 长轮询、历史拼接、主动策略（中 / 英）。 |
 | `user_profile_doc*.md` | 用户画像（敏感信息，Git 已忽略，按需本地维护）。 |
 
 ### 建议阅读路径
